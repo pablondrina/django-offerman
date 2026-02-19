@@ -1,0 +1,170 @@
+"""
+Offerman Product Info Adapter — Implements Craftsman's ProductInfoBackend protocol.
+
+This adapter allows Craftsman to get product information from Offerman catalog.
+
+Usage in Craftsman settings.py:
+    CRAFTSMAN = {
+        "PRODUCT_INFO_BACKEND": "offerman.adapters.product_info.OffermanProductInfoBackend",
+    }
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from craftsman.protocols.product import ProductInfo, SkuValidationResult
+
+logger = logging.getLogger(__name__)
+
+
+def _craftsman_protocols_available() -> bool:
+    """Check if Craftsman protocols are available."""
+    try:
+        from craftsman.protocols.product import ProductInfo, SkuValidationResult
+        return True
+    except ImportError:
+        return False
+
+
+class OffermanProductInfoBackend:
+    """
+    Product info backend using Offerman Product model.
+
+    Implements ProductInfoBackend protocol from Craftsman.
+    """
+
+    def get_product_info(self, sku: str):
+        """Get product information."""
+        from craftsman.protocols.product import ProductInfo
+        from offerman.models import Product
+
+        try:
+            product = Product.objects.get(sku=sku)
+            # Get primary collection for category
+            primary_item = product.collection_items.filter(is_primary=True).first()
+            category = primary_item.collection.name if primary_item else None
+            return ProductInfo(
+                sku=product.sku,
+                name=product.name,
+                description=product.long_description,
+                category=category,
+                unit=product.unit,
+                base_price_q=product.base_price_q,
+                is_active=product.is_published and product.is_available,
+            )
+        except Product.DoesNotExist:
+            return None
+
+    def validate_output_sku(self, sku: str):
+        """Validate if SKU can be used as production output."""
+        from craftsman.protocols.product import SkuValidationResult
+        from offerman.models import Product
+
+        try:
+            product = Product.objects.get(sku=sku)
+
+            # Check if it's a bundle (cannot be production output)
+            if hasattr(product, "bundle_config"):
+                return SkuValidationResult(
+                    valid=False,
+                    sku=sku,
+                    error_code="is_bundle",
+                    message="Cannot use bundle as production output",
+                )
+
+            return SkuValidationResult(
+                valid=True,
+                sku=sku,
+                product_name=product.name,
+                is_active=product.is_published and product.is_available,
+            )
+
+        except Product.DoesNotExist:
+            # SKU doesn't exist, can be created
+            return SkuValidationResult(
+                valid=True,  # Allow creating new
+                sku=sku,
+                message="SKU not found, will be created on first production",
+            )
+
+    def get_product_infos(self, skus: list[str]) -> dict:
+        """Get product information for multiple SKUs."""
+        from craftsman.protocols.product import ProductInfo
+        from offerman.models import Product
+
+        products = Product.objects.filter(sku__in=skus).prefetch_related(
+            "collection_items__collection"
+        )
+        found = {p.sku: p for p in products}
+
+        result = {}
+        for sku in skus:
+            if sku in found:
+                p = found[sku]
+                primary_item = p.collection_items.filter(is_primary=True).first()
+                category = primary_item.collection.name if primary_item else None
+                result[sku] = ProductInfo(
+                    sku=p.sku,
+                    name=p.name,
+                    description=p.long_description,
+                    category=category,
+                    unit=p.unit,
+                    base_price_q=p.base_price_q,
+                    is_active=p.is_published and p.is_available,
+                )
+            else:
+                result[sku] = None
+
+        return result
+
+    def search_products(
+        self,
+        query: str,
+        limit: int = 20,
+        include_inactive: bool = False,
+    ) -> list:
+        """Search products by name or SKU."""
+        from craftsman.protocols.product import ProductInfo
+        from offerman.models import Product
+        from django.db import models
+
+        qs = Product.objects.filter(
+            models.Q(sku__icontains=query) | models.Q(name__icontains=query)
+        ).prefetch_related("collection_items__collection")
+
+        if not include_inactive:
+            qs = qs.filter(is_published=True, is_available=True)
+
+        qs = qs[:limit]
+
+        result = []
+        for p in qs:
+            primary_item = p.collection_items.filter(is_primary=True).first()
+            category = primary_item.collection.name if primary_item else None
+            result.append(
+                ProductInfo(
+                    sku=p.sku,
+                    name=p.name,
+                    description=p.long_description,
+                    category=category,
+                    unit=p.unit,
+                    base_price_q=p.base_price_q,
+                    is_active=p.is_published and p.is_available,
+                )
+            )
+        return result
+
+
+# Singleton factory
+_backend_instance: OffermanProductInfoBackend | None = None
+
+
+def get_product_info_backend() -> OffermanProductInfoBackend:
+    """Return singleton instance of OffermanProductInfoBackend."""
+    global _backend_instance
+    if _backend_instance is None:
+        _backend_instance = OffermanProductInfoBackend()
+    return _backend_instance

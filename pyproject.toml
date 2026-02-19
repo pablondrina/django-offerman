@@ -1,0 +1,110 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "django-offerman"
+version = "0.3.0"
+description = "Product catalog and pricing for Django"
+readme = "README.md"
+license = "MIT"
+authors = [
+    {name = "Pablo Valentini", email = "pablondrina@gmail.com"}
+]
+maintainers = [
+    {name = "Pablo Valentini", email = "pablondrina@gmail.com"}
+]
+keywords = [
+    "django",
+    "ecommerce",
+    "catalog",
+    "products",
+    "pricing",
+    "collections",
+    "listings",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Web Environment",
+    "Framework :: Django",
+    "Framework :: Django :: 5.0",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+requires-python = ">=3.11"
+dependencies = [
+    "Django>=5.0,<6.0",
+    "django-taggit>=5.0",
+]
+
+[project.optional-dependencies]
+unfold = [
+    "django-unfold>=0.49,<1.0",
+]
+admin = [
+    "django-unfold>=0.49,<1.0",
+]
+history = [
+    "django-simple-history>=3.4",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-django>=4.5",
+    "pytest-cov>=4.0",
+    "ruff>=0.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/pablondrina/django-offerman"
+Repository = "https://github.com/pablondrina/django-offerman"
+Changelog = "https://github.com/pablondrina/django-offerman/blob/main/CHANGELOG.md"
+Issues = "https://github.com/pablondrina/django-offerman/issues"
+
+[tool.setuptools]
+packages = [
+    "offerman",
+    "offerman.admin",
+    "offerman.adapters",
+    "offerman.models",
+    "offerman.protocols",
+    "offerman.signals",
+    "offerman.migrations",
+    "offerman.tests",
+    "offerman.contrib",
+    "offerman.contrib.admin_unfold",
+    "offerman.contrib.suggestions",
+]
+include-package-data = true
+
+[tool.setuptools.package-dir]
+offerman = "."
+
+[tool.setuptools.package-data]
+offerman = [
+    "py.typed",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+select = ["E", "W", "F", "I", "B", "C4", "UP"]
+ignore = ["E501", "B008"]
+exclude = ["migrations"]
+
+[tool.ruff.isort]
+known-first-party = ["offerman"]
+known-third-party = ["django", "taggit"]
+
+[tool.pytest.ini_options]
+python_files = ["test_*.py", "*_test.py"]
+addopts = ["--strict-markers", "-ra"]
+
+[tool.coverage.run]
+source = ["offerman"]
+omit = ["*/migrations/*", "*/tests/*"]
