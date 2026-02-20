@@ -200,7 +200,7 @@ class ProductAdmin(BaseModelAdmin):
     fieldsets = [
         (
             None,
-            {"fields": ("sku", "name", "description", "keywords")},
+            {"fields": ("sku", "name", "short_description", "long_description", "keywords")},
         ),
         (
             "Price",
