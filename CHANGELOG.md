@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-02-20
+
+### Fixed
+- `ProductAdmin` fieldset referenced non-existent `description` field; corrected to `short_description` and `long_description`.
+
 ## [0.3.0] - 2025-01-20
 
 ### Added
