@@ -2,6 +2,7 @@
 
 import uuid as uuid_lib
 
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -14,7 +15,7 @@ class Collection(models.Model):
     Can behave as Category (hierarchical) or Collection (flat, temporal).
     """
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, editable=False, unique=True)
+    uuid = models.UUIDField(default=uuid_lib.uuid4, editable=False, unique=True, verbose_name=_("UUID"))
 
     slug = models.SlugField(max_length=50, unique=True, verbose_name=_("slug"))
     name = models.CharField(max_length=100, verbose_name=_("nome"))
@@ -59,6 +60,30 @@ class Collection(models.Model):
             return False
         return True
 
+    def clean(self):
+        """Validate no circular parent reference and enforce max depth."""
+        from offerman.conf import offerman_settings
+
+        if self.parent_id:
+            visited = {self.pk}
+            current = self.parent
+            depth = 1
+            while current:
+                if current.pk in visited:
+                    raise ValidationError({"parent": "Circular reference detected."})
+                visited.add(current.pk)
+                depth += 1
+                current = current.parent
+
+            if depth > offerman_settings.MAX_COLLECTION_DEPTH:
+                raise ValidationError(
+                    {"parent": f"Max collection depth ({offerman_settings.MAX_COLLECTION_DEPTH}) exceeded."}
+                )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
     @property
     def full_path(self) -> str:
         """Returns full path: 'Category > Subcategory > Collection'."""
@@ -73,20 +98,33 @@ class Collection(models.Model):
             return self.parent.depth + 1
         return 0
 
-    def get_ancestors(self) -> list["Collection"]:
+    def get_ancestors(self, max_depth: int | None = None) -> list["Collection"]:
         """Returns list of ancestors from root to parent."""
+        if max_depth is None:
+            from offerman.conf import offerman_settings
+
+            max_depth = offerman_settings.MAX_COLLECTION_DEPTH
         ancestors = []
         current = self.parent
-        while current:
+        depth = 0
+        while current and depth < max_depth:
             ancestors.insert(0, current)
             current = current.parent
+            depth += 1
         return ancestors
 
-    def get_descendants(self) -> models.QuerySet["Collection"]:
+    def get_descendants(self, max_depth: int | None = None, _depth: int = 0) -> list["Collection"]:
         """Returns all descendants (children, grandchildren, etc.)."""
-        descendants = list(self.children.all())
-        for child in self.children.all():
-            descendants.extend(child.get_descendants())
+        if max_depth is None:
+            from offerman.conf import offerman_settings
+
+            max_depth = offerman_settings.MAX_COLLECTION_DEPTH
+        if _depth >= max_depth:
+            return []
+        children = list(self.children.all())
+        descendants = list(children)
+        for child in children:
+            descendants.extend(child.get_descendants(max_depth=max_depth, _depth=_depth + 1))
         return descendants
 
 
@@ -116,7 +154,17 @@ class CollectionItem(models.Model):
     class Meta:
         verbose_name = _("Item de Coleção")
         verbose_name_plural = _("Itens de Coleção")
-        unique_together = [["collection", "product"]]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["collection", "product"],
+                name="unique_collection_product",
+            ),
+            models.UniqueConstraint(
+                fields=["product"],
+                condition=models.Q(is_primary=True),
+                name="unique_primary_collection_per_product",
+            ),
+        ]
         ordering = ["sort_order"]
 
     def __str__(self):

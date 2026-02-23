@@ -12,6 +12,7 @@ pip install django-offerman
 INSTALLED_APPS = [
     ...
     'taggit',  # required
+    'simple_history',  # required
     'offerman',
     'offerman.contrib.admin_unfold',  # optional, for Unfold admin
 ]
@@ -23,26 +24,33 @@ python manage.py migrate
 
 ## Core Concepts
 
-### Category
-Hierarchical product classification.
+### Collection
+
+Unified product grouping (hierarchical or flat, with optional temporal validity).
 
 ```python
-from offerman.models import Category
+from offerman.models import Collection
 
-padaria = Category.objects.create(
-    name="Padaria",
+padaria = Collection.objects.create(
     slug="padaria",
+    name="Padaria",
 )
 
-paes = Category.objects.create(
-    name="Paes",
+paes = Collection.objects.create(
     slug="paes",
+    name="Paes",
     parent=padaria,
 )
+
+# Hierarchy
+paes.full_path       # "Padaria > Paes"
+paes.depth           # 1
+padaria.get_descendants()  # [paes, ...]
 ```
 
 ### Product
-Sellable item with pricing and visibility controls.
+
+Sellable item with pricing and availability controls.
 
 ```python
 from offerman.models import Product
@@ -50,26 +58,27 @@ from offerman.models import Product
 product = Product.objects.create(
     sku="PAO-FRANCES",
     name="Pao Frances",
-    category=paes,
     base_price_q=80,  # R$ 0.80 in cents
-    is_sellable=True,
+    unit="un",
 )
 ```
 
-### Collection
-Flexible product grouping (non-hierarchical).
+### CollectionItem
+
+Associate products with collections:
 
 ```python
-from offerman.models import Collection
+from offerman.models import CollectionItem
 
-destaque = Collection.objects.create(
-    slug="destaques",
-    name="Produtos em Destaque",
+CollectionItem.objects.create(
+    collection=paes,
+    product=product,
+    is_primary=True,  # primary collection for this product
 )
-destaque.products.add(product1, product2)
 ```
 
-### PriceList
+### PriceList (Listing)
+
 Channel-specific pricing.
 
 ```python
@@ -94,20 +103,20 @@ Products have two visibility flags:
 
 | Flag | Meaning | Use Case |
 |------|---------|----------|
-| `is_hidden` | Not shown in catalog | Seasonal items, internal products |
-| `is_unavailable` | Shown but not purchasable | Out of stock, temporarily paused |
+| `is_published` | Shown in catalog | Set False for hidden/discontinued items |
+| `is_available` | Available for sale | Set False for paused or ingredient-only items |
 
 ```python
-# Hide product (not visible)
-product.is_hidden = True
+# Unpublish product (hidden from catalog)
+product.is_published = False
 
-# Pause product (visible but not purchasable)
-product.is_unavailable = True
+# Pause product (visible but not for sale)
+product.is_available = False
 
-# Check status
-product.is_active      # not hidden AND not unavailable
-product.is_visible     # not hidden
-product.is_purchasable # not unavailable AND is_sellable
+# QuerySet filters
+Product.objects.active()     # is_published=True AND is_available=True
+Product.objects.published()  # is_published=True
+Product.objects.available()  # is_available=True
 ```
 
 ## Bundles/Combos
@@ -126,40 +135,48 @@ combo = Product.objects.create(
 ProductComponent.objects.create(
     parent=combo,
     component=croissant,
-    quantity=Decimal("1"),
+    qty=Decimal("1"),
 )
 
 ProductComponent.objects.create(
     parent=combo,
     component=cafe,
-    quantity=Decimal("1"),
+    qty=Decimal("1"),
 )
 
 # Check if bundle
 combo.is_bundle  # True
 ```
 
+Circular references are detected automatically via `save()` -> `full_clean()`.
+
 ## Price Resolution
 
-Get product price for a channel:
+Get product price via CatalogService:
 
 ```python
-from offerman.services import get_price
+from offerman.service import CatalogService
 
-# Get price from specific price list
-price = get_price(product, price_list_code="ifood")
+# Base price
+price = CatalogService.price("PAO-FRANCES")
 
-# Get best price (highest priority valid price list)
-price = get_price(product)
+# Channel-specific price (from PriceList)
+price = CatalogService.price("PAO-FRANCES", channel="ifood")
+
+# With quantity
+price = CatalogService.price("PAO-FRANCES", qty=Decimal("10"))
 ```
 
 ## Integration with Omniman
 
-Offerman provides a pricing backend for Omniman:
+Offerman provides a CatalogBackend for Omniman:
 
 ```python
-# settings.py
-OMNIMAN_PRICING_BACKEND = "omniman.contrib.pricing.PricingBackend"
+from offerman.adapters.catalog_backend import OffermanCatalogBackend
+
+backend = OffermanCatalogBackend()
+product_info = backend.get_product("PAO-FRANCES")
+price_info = backend.get_price("PAO-FRANCES", qty=Decimal("3"))
 ```
 
 ## Keywords/Tags
@@ -196,9 +213,35 @@ INSTALLED_APPS = [
 
 Features:
 - Colored visibility badges
-- Bulk actions (hide/show, pause/resume)
+- Bulk actions (publish/unpublish, enable/disable)
 - Inline components for bundles
 - Price list item inlines
+
+## Shopman Suite
+
+Offerman is part of the Shopman Suite. The admin UI uses shared utilities from django-shopman-commons:
+
+- `unfold_badge` — colored badge helpers
+- `AutofillInlineMixin` — auto-fill inline fields from autocomplete data
+
+```python
+from commons.contrib.admin_unfold.badges import unfold_badge
+from commons.admin.mixins import AutofillInlineMixin
+```
+
+### AutofillInlineMixin
+
+Auto-fills inline fields from autocomplete selection data (Select2 cache).
+
+```python
+class ListingItemInline(AutofillInlineMixin, admin.TabularInline):
+    model = ListingItem
+    autocomplete_fields = ["product"]
+    autofill_fields = {"product": {"price_q": "base_price_q"}}
+```
+
+When the user selects a product, `price_q` is filled with the
+product's `base_price_q`. Target fields become optional automatically.
 
 ## Requirements
 

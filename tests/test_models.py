@@ -84,20 +84,66 @@ class TestProduct:
         assert product.is_bundle is False
         assert combo.is_bundle is True
 
-    def test_margin_percent(self, db):
-        """Test margin_percent calculation."""
+    def test_margin_percent_with_cost_backend(self, db):
+        """Test margin_percent with CostBackend configured."""
+        from unittest.mock import MagicMock
+        from offerman.conf import reset_cost_backend
+        import offerman.conf as conf
+
         product = Product.objects.create(
             sku="MARGIN-TEST",
             name="Margin Test",
             base_price_q=1000,
-            reference_cost_q=700,
         )
-        assert product.margin_percent == Decimal("30.0")
 
-    def test_margin_percent_no_cost(self, db):
-        """Test margin_percent when no cost."""
+        # Mock CostBackend
+        mock_backend = MagicMock()
+        mock_backend.get_cost.return_value = 700
+        original = conf._cost_backend_instance
+        conf._cost_backend_instance = mock_backend
+
+        try:
+            assert product.margin_percent == Decimal("30.0")
+            mock_backend.get_cost.assert_called_with("MARGIN-TEST")
+        finally:
+            conf._cost_backend_instance = original
+
+    def test_margin_percent_no_cost_backend(self, db):
+        """Test margin_percent when no CostBackend configured."""
         product = Product.objects.create(sku="NO-COST", name="No Cost")
         assert product.margin_percent is None
+
+    def test_is_perishable_with_shelf_life(self, db):
+        """Test is_perishable returns True when shelf_life_hours set."""
+        product = Product.objects.create(
+            sku="PERISHABLE",
+            name="Perishable",
+            shelf_life_hours=12,
+        )
+        assert product.is_perishable is True
+
+    def test_is_perishable_without_shelf_life(self, db):
+        """Test is_perishable returns False when shelf_life_hours is None."""
+        product = Product.objects.create(sku="DURABLE", name="Durable")
+        assert product.is_perishable is False
+
+    def test_production_cycle_hours(self, db):
+        """Test production_cycle_hours field."""
+        product = Product.objects.create(
+            sku="BREAD",
+            name="Bread",
+            production_cycle_hours=4,
+        )
+        assert product.production_cycle_hours == 4
+
+    def test_shelf_life_hours(self, db):
+        """Test shelf_life_hours field."""
+        product = Product.objects.create(
+            sku="CROISSANT-SL",
+            name="Croissant",
+            shelf_life_hours=12,
+        )
+        assert product.shelf_life_hours == 12
 
 
 class TestProductComponent:
@@ -239,18 +285,21 @@ class TestCollection:
 
     def test_is_valid(self, db):
         """Test is_valid method."""
-        from datetime import date, timedelta
+        from datetime import timedelta
 
+        from django.utils import timezone
+
+        today = timezone.now().date()
         coll = Collection.objects.create(
             slug="natal",
             name="Christmas",
-            valid_from=date.today() - timedelta(days=1),
-            valid_until=date.today() + timedelta(days=1),
+            valid_from=today - timedelta(days=1),
+            valid_until=today + timedelta(days=1),
         )
         assert coll.is_valid() is True
 
         # Not yet started
-        coll.valid_from = date.today() + timedelta(days=1)
+        coll.valid_from = today + timedelta(days=1)
         assert coll.is_valid() is False
 
 

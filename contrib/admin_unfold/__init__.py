@@ -1,8 +1,8 @@
 """Offerman Admin with Unfold theme."""
 
 # Lazy imports to avoid circular dependencies
-# Import directly from .base when needed:
-#   from offerman.contrib.admin_unfold.base import BaseModelAdmin
+# Import directly from shopman_commons when needed:
+#   from shopman_commons.contrib.admin_unfold.base import BaseModelAdmin
 
 __all__ = [
     "BaseModelAdmin",
@@ -13,7 +13,7 @@ __all__ = [
 def __getattr__(name):
     """Lazy import to avoid circular imports during app loading."""
     if name in ("BaseModelAdmin", "BaseTabularInline"):
-        from offerman.contrib.admin_unfold.base import (
+        from shopman_commons.contrib.admin_unfold.base import (
             BaseModelAdmin,
             BaseTabularInline,
         )

@@ -54,7 +54,10 @@ class OffermanCatalogBackend:
     ) -> PriceInfo:
         """Return price."""
         total_price_q = CatalogService.price(sku, qty=qty, channel=channel)
-        unit_price_q = total_price_q // int(qty) if qty > 0 else total_price_q
+        # H14: Use round() instead of // to avoid losing centavos.
+        # E.g. R$10.00 for 3 units: 1000 // 3 = 333 (loses 1 centavo)
+        #                            round(1000 / 3) = 333 (correct rounding)
+        unit_price_q = round(total_price_q / qty) if qty > 0 else total_price_q
 
         return PriceInfo(
             sku=sku,
@@ -86,5 +89,6 @@ class OffermanCatalogBackend:
             return []
 
 
-# Verify implementation
-assert isinstance(OffermanCatalogBackend(), CatalogBackend)
+# Verify implementation at import time
+if not isinstance(OffermanCatalogBackend(), CatalogBackend):
+    raise TypeError("OffermanCatalogBackend does not implement CatalogBackend protocol")

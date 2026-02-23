@@ -2,13 +2,15 @@
 
 from django.contrib import admin
 
+from shopman_commons.admin.mixins import AutofillInlineMixin
 from offerman.models import Listing, ListingItem
 
 
-class ListingItemInline(admin.TabularInline):
+class ListingItemInline(AutofillInlineMixin, admin.TabularInline):
     model = ListingItem
     extra = 1
     autocomplete_fields = ["product"]
+    autofill_fields = {"product": {"price_q": "base_price_q"}}
     fields = ["product", "price_q", "min_qty", "is_published", "is_available"]
 
 
@@ -34,6 +36,18 @@ class ListingAdmin(admin.ModelAdmin):
         ("Validity", {"fields": ("valid_from", "valid_until")}),
         ("Settings", {"fields": ("priority", "is_active")}),
     ]
+
+    def save_formset(self, request, form, formset, change):
+        """Default price_q to product.base_price_q when left blank."""
+        instances = formset.save(commit=False)
+        for instance in instances:
+            if isinstance(instance, ListingItem) and instance.product_id:
+                if not instance.price_q:
+                    instance.price_q = instance.product.base_price_q
+            instance.save()
+        for obj in formset.deleted_objects:
+            obj.delete()
+        formset.save_m2m()
 
     def items_count(self, obj):
         return obj.items.count()

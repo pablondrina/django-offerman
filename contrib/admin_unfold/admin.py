@@ -8,11 +8,14 @@ The admins will automatically unregister the basic admins and register
 the Unfold versions.
 """
 
+from django import forms
 from django.contrib import admin
 from django.utils.html import format_html
 from unfold.decorators import display
 
-from offerman.contrib.admin_unfold.base import BaseModelAdmin, BaseTabularInline
+from shopman_commons.admin.mixins import AutofillInlineMixin
+from shopman_commons.contrib.admin_unfold.base import BaseModelAdmin, BaseTabularInline
+from shopman_commons.contrib.admin_unfold.badges import unfold_badge
 from offerman.models import (
     Collection,
     CollectionItem,
@@ -22,24 +25,6 @@ from offerman.models import (
     ProductComponent,
 )
 
-
-def _unfold_badge(text, color="base"):
-    """Create Unfold badge with colored background."""
-    base_classes = (
-        "inline-block font-semibold h-6 leading-6 px-2 "
-        "rounded-default whitespace-nowrap text-xs uppercase"
-    )
-
-    color_classes = {
-        "base": "bg-base-100 text-base-700 dark:bg-base-500/20 dark:text-base-200",
-        "red": "bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-400",
-        "green": "bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-400",
-        "yellow": "bg-yellow-100 text-yellow-700 dark:bg-yellow-500/20 dark:text-yellow-400",
-        "blue": "bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-400",
-    }
-
-    classes = f"{base_classes} {color_classes.get(color, color_classes['base'])}"
-    return format_html('<span class="{}">{}</span>', classes, text)
 
 
 # Unregister basic admins
@@ -104,10 +89,11 @@ class CollectionAdmin(BaseModelAdmin):
 # =============================================================================
 
 
-class ListingItemInline(BaseTabularInline):
+class ListingItemInline(AutofillInlineMixin, BaseTabularInline):
     model = ListingItem
     extra = 1
     autocomplete_fields = ["product"]
+    autofill_fields = {"product": {"price_q": "base_price_q"}}
     fields = ["product", "price_q", "min_qty", "is_published", "is_available"]
 
 
@@ -133,6 +119,18 @@ class ListingAdmin(BaseModelAdmin):
         ("Validity", {"fields": ("valid_from", "valid_until")}),
         ("Settings", {"fields": ("priority", "is_active")}),
     ]
+
+    def save_formset(self, request, form, formset, change):
+        """Default price_q to product.base_price_q when left blank."""
+        instances = formset.save(commit=False)
+        for instance in instances:
+            if isinstance(instance, ListingItem) and instance.product_id:
+                if not instance.price_q:
+                    instance.price_q = instance.product.base_price_q
+            instance.save()
+        for obj in formset.deleted_objects:
+            obj.delete()
+        formset.save_m2m()
 
     @display(description="Active", boolean=True)
     def is_active_badge(self, obj):
@@ -194,7 +192,7 @@ class ProductAdmin(BaseModelAdmin):
         "availability_policy",
     ]
     search_fields = ["sku", "name", "keywords__name"]
-    readonly_fields = ["uuid", "created_at", "updated_at", "is_bundle", "margin_percent"]
+    readonly_fields = ["uuid", "created_at", "updated_at", "is_bundle", "margin_percent", "is_perishable"]
     inlines = [ProductCollectionItemInline, ProductListingItemInline, ProductComponentInline]
 
     fieldsets = [
@@ -203,8 +201,8 @@ class ProductAdmin(BaseModelAdmin):
             {"fields": ("sku", "name", "short_description", "long_description", "keywords")},
         ),
         (
-            "Price",
-            {"fields": ("base_price_q", "reference_cost_q", "margin_percent")},
+            "Price & Cost",
+            {"fields": ("base_price_q", "margin_percent")},
         ),
         (
             "Publication & Availability",
@@ -219,7 +217,9 @@ class ProductAdmin(BaseModelAdmin):
                 "fields": (
                     "unit",
                     "availability_policy",
-                    "shelflife",
+                    "shelf_life_hours",
+                    "is_perishable",
+                    "production_cycle_hours",
                     "is_batch_produced",
                 )
             },
@@ -243,12 +243,12 @@ class ProductAdmin(BaseModelAdmin):
         badges = []
 
         if not obj.is_published:
-            badges.append(_unfold_badge("Unpublished", "yellow"))
+            badges.append(unfold_badge("Unpublished", "yellow"))
         if not obj.is_available:
-            badges.append(_unfold_badge("Unavailable", "red"))
+            badges.append(unfold_badge("Unavailable", "red"))
 
         if not badges:
-            return _unfold_badge("Active", "green")
+            return unfold_badge("Active", "green")
 
         return format_html(" ".join(str(b) for b in badges))
 

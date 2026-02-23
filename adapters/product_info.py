@@ -12,6 +12,7 @@ Usage in Craftsman settings.py:
 from __future__ import annotations
 
 import logging
+import threading
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -67,7 +68,7 @@ class OffermanProductInfoBackend:
             product = Product.objects.get(sku=sku)
 
             # Check if it's a bundle (cannot be production output)
-            if hasattr(product, "bundle_config"):
+            if product.is_bundle:
                 return SkuValidationResult(
                     valid=False,
                     sku=sku,
@@ -159,6 +160,7 @@ class OffermanProductInfoBackend:
 
 
 # Singleton factory
+_lock = threading.Lock()
 _backend_instance: OffermanProductInfoBackend | None = None
 
 
@@ -166,5 +168,13 @@ def get_product_info_backend() -> OffermanProductInfoBackend:
     """Return singleton instance of OffermanProductInfoBackend."""
     global _backend_instance
     if _backend_instance is None:
-        _backend_instance = OffermanProductInfoBackend()
+        with _lock:
+            if _backend_instance is None:  # double-checked
+                _backend_instance = OffermanProductInfoBackend()
     return _backend_instance
+
+
+def reset_product_info_backend() -> None:
+    """Reset singleton (for tests)."""
+    global _backend_instance
+    _backend_instance = None

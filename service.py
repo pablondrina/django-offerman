@@ -15,7 +15,7 @@ LISTING / CHANNEL (per-channel availability):
     CatalogService.is_product_available(product, listing_code) - Check availability
 """
 
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING
 
 from django.db import models
@@ -99,6 +99,9 @@ class CatalogService:
         Raises:
             CatalogError: If SKU not found
         """
+        if qty <= 0:
+            raise CatalogError("INVALID_QUANTITY", sku=sku, qty=str(qty))
+
         product = cls.get(sku)
         if not product:
             raise CatalogError("SKU_NOT_FOUND", sku=sku)
@@ -108,10 +111,10 @@ class CatalogService:
         if effective_price_list:
             unit_price = cls._get_price_from_list(product, effective_price_list, qty)
             if unit_price is not None:
-                return int(unit_price * qty)
+                return int(Decimal(str(unit_price * qty)).to_integral_value(rounding=ROUND_HALF_UP))
 
         # Fallback: base price
-        return int(product.base_price_q * qty)
+        return int(Decimal(str(product.base_price_q * qty)).to_integral_value(rounding=ROUND_HALF_UP))
 
     @classmethod
     def _get_price_from_list(
@@ -130,16 +133,19 @@ class CatalogService:
         try:
             from offerman.models import PriceList, PriceListItem
 
-            pl = PriceList.objects.get(code=price_list_code)
-            if not pl.is_valid():
+            pl = PriceList.objects.filter(code=price_list_code).first()
+            if not pl or not pl.is_valid():
                 return None
 
-            # Find item with highest min_qty that is still <= qty
+            # Find item with highest min_qty that is still <= qty.
+            # Only return price for published and available items in this channel.
             item = (
                 PriceListItem.objects.filter(
-                    price_list=pl,
+                    listing=pl,
                     product=product,
                     min_qty__lte=qty,
+                    is_published=True,
+                    is_available=True,
                 )
                 .order_by("-min_qty")
                 .first()
@@ -147,7 +153,7 @@ class CatalogService:
 
             return item.price_q if item else None
 
-        except Exception:
+        except (ImportError, LookupError, ValueError):
             # PriceList not available or not found
             return None
 

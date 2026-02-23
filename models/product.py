@@ -1,8 +1,9 @@
 """Product model."""
 
 import uuid as uuid_lib
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from simple_history.models import HistoricalRecords
@@ -36,14 +37,13 @@ class ProductQuerySet(models.QuerySet):
 class Product(models.Model):
     """Sellable product."""
 
-    uuid = models.UUIDField(default=uuid_lib.uuid4, editable=False, unique=True)
+    uuid = models.UUIDField(default=uuid_lib.uuid4, editable=False, unique=True, verbose_name=_("UUID"))
 
     # Identification
     sku = models.CharField(
         _("SKU"),
         max_length=100,
         unique=True,
-        db_index=True,
     )
     name = models.CharField(_("nome"), max_length=200)
     short_description = models.CharField(
@@ -77,6 +77,7 @@ class Product(models.Model):
     base_price_q = models.BigIntegerField(
         _("preço base"),
         default=0,
+        validators=[MinValueValidator(0)],
         help_text=_("Preço base em centavos"),
     )
 
@@ -88,20 +89,20 @@ class Product(models.Model):
         default=AvailabilityPolicy.PLANNED_OK,
     )
 
-    # Reference cost (updated by Craftsman)
-    reference_cost_q = models.BigIntegerField(
-        _("custo de referência"),
+    # Shelflife in hours (None = non-perishable, 0 = immediate consumption)
+    shelf_life_hours = models.IntegerField(
+        _("validade (horas)"),
         null=True,
         blank=True,
-        help_text=_("Custo de produção em centavos (ref. Craftsman)"),
+        help_text=_("Validade em horas. Vazio=não perecível, 0=consumo imediato"),
     )
 
-    # Shelflife in days (None = non-perishable, 0 = same day only)
-    shelflife = models.IntegerField(
-        _("validade"),
+    # Production cycle in hours (how long to produce, used by Stockman/Craftsman for planning)
+    production_cycle_hours = models.IntegerField(
+        _("ciclo de produção (horas)"),
         null=True,
         blank=True,
-        help_text=_("Validade em dias. Vazio=não perecível, 0=somente no dia"),
+        help_text=_("Tempo de produção em horas (ex: 4h para croissant)"),
     )
 
     # === PUBLICATION & AVAILABILITY ===
@@ -148,12 +149,19 @@ class Product(models.Model):
         verbose_name_plural = _("produtos")
         ordering = ["name"]
         indexes = [
-            models.Index(fields=["sku"]),
             models.Index(fields=["is_published", "is_available"]),
         ]
 
     def __str__(self):
         return f"{self.sku} - {self.name}"
+
+    def save(self, *args, **kwargs):
+        is_new = self._state.adding
+        super().save(*args, **kwargs)
+        if is_new:
+            from offerman.signals import product_created
+
+            product_created.send(sender=self.__class__, instance=self, sku=self.sku)
 
     @property
     def base_price(self) -> Decimal:
@@ -162,14 +170,12 @@ class Product(models.Model):
 
     @base_price.setter
     def base_price(self, value: Decimal):
-        self.base_price_q = int(value * 100)
+        self.base_price_q = int((Decimal(str(value)) * 100).to_integral_value(rounding=ROUND_HALF_UP))
 
     @property
-    def reference_cost(self) -> Decimal | None:
-        """Reference cost in currency units."""
-        if self.reference_cost_q is None:
-            return None
-        return Decimal(self.reference_cost_q) / 100
+    def is_perishable(self) -> bool:
+        """True if product has a shelf life (perishable)."""
+        return self.shelf_life_hours is not None
 
     @property
     def is_bundle(self) -> bool:
@@ -177,11 +183,27 @@ class Product(models.Model):
         return self.components.exists()
 
     @property
-    def margin_percent(self) -> Decimal | None:
-        """Margin percentage (if reference cost exists)."""
-        if not self.reference_cost_q or not self.base_price_q:
+    def reference_cost_q(self) -> int | None:
+        """
+        Production cost in centavos, read from CostBackend.
+
+        Replaces the old reference_cost_q field — cost is now owned by
+        the app that knows it (e.g. Craftsman), not stored on Product.
+        """
+        from offerman.conf import get_cost_backend
+
+        backend = get_cost_backend()
+        if backend is None:
             return None
-        margin = self.base_price_q - self.reference_cost_q
+        return backend.get_cost(self.sku)
+
+    @property
+    def margin_percent(self) -> Decimal | None:
+        """Margin percentage (if CostBackend provides cost)."""
+        cost_q = self.reference_cost_q
+        if not cost_q or not self.base_price_q:
+            return None
+        margin = self.base_price_q - cost_q
         return Decimal(margin * 100 / self.base_price_q).quantize(Decimal("0.1"))
 
     @property

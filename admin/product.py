@@ -28,7 +28,7 @@ class ProductAdmin(admin.ModelAdmin):
         "availability_policy",
     ]
     search_fields = ["sku", "name", "keywords__name"]
-    readonly_fields = ["uuid", "created_at", "updated_at", "is_bundle", "margin_percent"]
+    readonly_fields = ["uuid", "created_at", "updated_at", "is_bundle", "margin_percent", "is_perishable"]
     inlines = [ProductComponentInline]
 
     fieldsets = [
@@ -37,8 +37,8 @@ class ProductAdmin(admin.ModelAdmin):
             {"fields": ("sku", "name", "short_description", "long_description", "keywords")},
         ),
         (
-            "Price",
-            {"fields": ("base_price_q", "reference_cost_q", "margin_percent")},
+            "Price & Cost",
+            {"fields": ("base_price_q", "margin_percent")},
         ),
         (
             "Publication & Availability",
@@ -53,7 +53,9 @@ class ProductAdmin(admin.ModelAdmin):
                 "fields": (
                     "unit",
                     "availability_policy",
-                    "shelflife",
+                    "shelf_life_hours",
+                    "is_perishable",
+                    "production_cycle_hours",
                     "is_batch_produced",
                 )
             },

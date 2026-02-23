@@ -1,21 +1,46 @@
-"""Offerman signals."""
+"""
+Offerman signals.
+
+Signals:
+    product_created:
+        Sent after a new Product is saved for the first time.
+
+        Kwargs:
+            sender: Product class
+            instance: The Product instance that was created
+            sku: str — the product SKU
+
+        Example handler::
+
+            from offerman.signals import product_created
+
+            def on_product_created(sender, instance, sku, **kwargs):
+                logger.info("New product: %s", sku)
+
+            product_created.connect(on_product_created)
+
+    price_changed:
+        Sent after a ListingItem's price_q changes.
+
+        Kwargs:
+            sender: ListingItem class
+            instance: The ListingItem instance
+            listing_code: str — the listing code
+            sku: str — the product SKU
+            old_price_q: int — previous price in centavos
+            new_price_q: int — new price in centavos
+
+        Example handler::
+
+            from offerman.signals import price_changed
+
+            def on_price_changed(sender, instance, sku, old_price_q, new_price_q, **kwargs):
+                logger.info("Price for %s changed: %d -> %d", sku, old_price_q, new_price_q)
+
+            price_changed.connect(on_price_changed)
+"""
 
 from django.dispatch import Signal
 
-# Product signals
-product_created = Signal()  # sender=Product
-product_updated = Signal()  # sender=Product, changes=dict
-product_deactivated = Signal()  # sender=Product
-
-# Visibility signals
-product_hidden = Signal()  # sender=Product
-product_shown = Signal()  # sender=Product
-product_paused = Signal()  # sender=Product (is_unavailable=True)
-product_resumed = Signal()  # sender=Product (is_unavailable=False)
-
-# Price signals
-price_changed = Signal()  # sender=Product, old_price_q=int, new_price_q=int
-
-# Composition signals
-component_added = Signal()  # sender=ProductComponent
-component_removed = Signal()  # sender=ProductComponent
+product_created = Signal()
+price_changed = Signal()

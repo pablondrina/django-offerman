@@ -12,6 +12,7 @@ Usage in Stockman settings.py:
 from __future__ import annotations
 
 import logging
+import threading
 from typing import TYPE_CHECKING
 
 from django.db import models
@@ -149,6 +150,7 @@ class OffermanSkuValidator:
 
 
 # Singleton factory
+_lock = threading.Lock()
 _validator_instance: OffermanSkuValidator | None = None
 
 
@@ -156,5 +158,13 @@ def get_sku_validator() -> OffermanSkuValidator:
     """Return singleton instance of OffermanSkuValidator."""
     global _validator_instance
     if _validator_instance is None:
-        _validator_instance = OffermanSkuValidator()
+        with _lock:
+            if _validator_instance is None:  # double-checked
+                _validator_instance = OffermanSkuValidator()
     return _validator_instance
+
+
+def reset_sku_validator() -> None:
+    """Reset singleton (for tests)."""
+    global _validator_instance
+    _validator_instance = None

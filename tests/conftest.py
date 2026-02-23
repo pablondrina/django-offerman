@@ -90,7 +90,7 @@ def croissant(db, collection):
         sku="CROISSANT",
         name="Croissant",
         base_price_q=800,
-        shelflife=0,  # Same day only
+        shelf_life_hours=12,  # 12 hours shelf life
     )
     CollectionItem.objects.create(collection=collection, product=prod, is_primary=True)
     return prod

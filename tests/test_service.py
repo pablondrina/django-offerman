@@ -6,7 +6,7 @@ import pytest
 
 from offerman.service import CatalogService
 from offerman.exceptions import CatalogError
-from offerman.models import Product, Listing, ListingItem
+from offerman.models import Collection, CollectionItem, Product, Listing, ListingItem
 
 
 pytestmark = pytest.mark.django_db
@@ -228,3 +228,260 @@ class TestCatalogAvailability:
         )
 
         assert CatalogService.is_product_available(product, "shop") is False
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 4.1 — Pricing by channel (complete flow)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestCatalogPriceChannel:
+    """Full pricing flow with channel/listing support."""
+
+    def test_base_price_without_channel(self, db):
+        """Base price returned when no channel specified."""
+        Product.objects.create(sku="CH-1", name="Product", base_price_q=500)
+        assert CatalogService.price("CH-1") == 500
+
+    def test_price_with_channel_and_listing_item(self, db):
+        """Channel-specific price overrides base price."""
+        p = Product.objects.create(sku="CH-2", name="Product", base_price_q=500)
+        listing = Listing.objects.create(code="ifood", name="iFood")
+        ListingItem.objects.create(listing=listing, product=p, price_q=700)
+
+        assert CatalogService.price("CH-2", channel="ifood") == 700
+
+    def test_price_with_channel_no_item_fallback(self, db):
+        """Channel exists but product not listed — fallback to base."""
+        Product.objects.create(sku="CH-3", name="Product", base_price_q=500)
+        Listing.objects.create(code="ifood", name="iFood")
+
+        assert CatalogService.price("CH-3", channel="ifood") == 500
+
+    def test_price_with_nonexistent_channel_fallback(self, db):
+        """Nonexistent channel — fallback to base."""
+        Product.objects.create(sku="CH-4", name="Product", base_price_q=500)
+        assert CatalogService.price("CH-4", channel="doesnt-exist") == 500
+
+    def test_price_with_tiered_pricing(self, db):
+        """min_qty tiers select highest qualifying tier."""
+        p = Product.objects.create(sku="CH-5", name="Product", base_price_q=500)
+        listing = Listing.objects.create(code="atacado", name="Wholesale")
+        ListingItem.objects.create(listing=listing, product=p, price_q=500, min_qty=Decimal("1"))
+        ListingItem.objects.create(listing=listing, product=p, price_q=400, min_qty=Decimal("10"))
+        ListingItem.objects.create(listing=listing, product=p, price_q=350, min_qty=Decimal("50"))
+
+        # qty=5 → tier min_qty=1 → price 500
+        assert CatalogService.price("CH-5", qty=Decimal("5"), channel="atacado") == 2500
+
+        # qty=10 → tier min_qty=10 → price 400
+        assert CatalogService.price("CH-5", qty=Decimal("10"), channel="atacado") == 4000
+
+        # qty=100 → tier min_qty=50 → price 350
+        assert CatalogService.price("CH-5", qty=Decimal("100"), channel="atacado") == 35000
+
+    def test_price_with_expired_listing(self, db):
+        """Expired listing falls back to base price."""
+        from datetime import date, timedelta
+
+        p = Product.objects.create(sku="CH-6", name="Product", base_price_q=500)
+        listing = Listing.objects.create(
+            code="promo",
+            name="Promo",
+            valid_until=date.today() - timedelta(days=1),
+        )
+        ListingItem.objects.create(listing=listing, product=p, price_q=300)
+
+        assert CatalogService.price("CH-6", channel="promo") == 500
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 4.2 — Search with combined filters
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestCatalogSearchFilters:
+    """Search with collection and keyword combinations."""
+
+    def test_search_by_collection(self, db):
+        """Filter by collection slug."""
+        coll = Collection.objects.create(slug="doces", name="Doces")
+        p1 = Product.objects.create(sku="BOLO", name="Bolo")
+        Product.objects.create(sku="PAO", name="Pao")
+        CollectionItem.objects.create(collection=coll, product=p1, is_primary=True)
+
+        results = CatalogService.search(collection="doces")
+        assert len(results) == 1
+        assert results[0].sku == "BOLO"
+
+    def test_search_by_keywords(self, db):
+        """Filter by keyword tags."""
+        p1 = Product.objects.create(sku="BOLO-CHOC", name="Bolo de Chocolate")
+        p1.keywords.add("chocolate", "doce")
+        p2 = Product.objects.create(sku="PAO-FRANCES", name="Pao Frances")
+        p2.keywords.add("salgado")
+
+        results = CatalogService.search(keywords=["chocolate"])
+        skus = [r.sku for r in results]
+        assert "BOLO-CHOC" in skus
+        assert "PAO-FRANCES" not in skus
+
+    def test_search_query_and_collection(self, db):
+        """Combined query text + collection filter."""
+        from offerman.models import Collection, CollectionItem
+
+        coll = Collection.objects.create(slug="paes", name="Paes")
+        p1 = Product.objects.create(sku="PAO-INT", name="Pao Integral")
+        p2 = Product.objects.create(sku="PAO-FR", name="Pao Frances")
+        p3 = Product.objects.create(sku="BOLO-INT", name="Bolo Integral")
+        CollectionItem.objects.create(collection=coll, product=p1)
+        CollectionItem.objects.create(collection=coll, product=p2)
+        # p3 NOT in collection
+
+        results = CatalogService.search(query="Integral", collection="paes")
+        skus = [r.sku for r in results]
+        assert "PAO-INT" in skus
+        assert "PAO-FR" not in skus  # Doesn't match query
+        assert "BOLO-INT" not in skus  # Not in collection
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 4.3 — Adapters
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestCatalogBackendAdapter:
+    """OffermanCatalogBackend integration."""
+
+    def test_get_product_returns_info(self, db):
+        """get_product returns correct ProductInfo fields."""
+        from offerman.adapters.catalog_backend import OffermanCatalogBackend
+
+        p = Product.objects.create(
+            sku="ADAPT-1", name="Adapter Test", base_price_q=999,
+            unit="kg", long_description="Test description",
+        )
+        coll = Collection.objects.create(slug="test-cat", name="Test Cat")
+        CollectionItem.objects.create(collection=coll, product=p, is_primary=True)
+
+        backend = OffermanCatalogBackend()
+        info = backend.get_product("ADAPT-1")
+
+        assert info is not None
+        assert info.sku == "ADAPT-1"
+        assert info.name == "Adapter Test"
+        assert info.unit == "kg"
+        assert info.base_price_q == 999
+        assert info.category == "test-cat"
+        assert info.is_bundle is False
+
+    def test_get_product_not_found(self, db):
+        """get_product returns None for unknown SKU."""
+        from offerman.adapters.catalog_backend import OffermanCatalogBackend
+
+        backend = OffermanCatalogBackend()
+        assert backend.get_product("NONEXISTENT") is None
+
+    def test_get_price_fractional_rounding(self, db):
+        """get_price rounds correctly for fractional qty."""
+        from offerman.adapters.catalog_backend import OffermanCatalogBackend
+        from unittest.mock import patch
+
+        backend = OffermanCatalogBackend()
+
+        with patch("offerman.adapters.catalog_backend.CatalogService.price", return_value=1001):
+            result = backend.get_price("ANY", qty=Decimal("3"))
+
+        assert result.unit_price_q == 334  # round(1001/3)
+        assert result.total_price_q == 1001
+
+    def test_expand_bundle_returns_components(self, db):
+        """expand_bundle returns BundleComponent list."""
+        from offerman.adapters.catalog_backend import OffermanCatalogBackend
+        from offerman.models import ProductComponent
+
+        combo = Product.objects.create(sku="COMBO-A", name="Combo A", base_price_q=1000)
+        comp1 = Product.objects.create(sku="ITEM-1", name="Item 1", base_price_q=500)
+        comp2 = Product.objects.create(sku="ITEM-2", name="Item 2", base_price_q=600)
+        ProductComponent.objects.create(parent=combo, component=comp1, qty=Decimal("2"))
+        ProductComponent.objects.create(parent=combo, component=comp2, qty=Decimal("1"))
+
+        backend = OffermanCatalogBackend()
+        result = backend.expand_bundle("COMBO-A")
+
+        assert len(result) == 2
+        skus = [r.sku for r in result]
+        assert "ITEM-1" in skus
+        assert "ITEM-2" in skus
+
+    def test_expand_bundle_non_bundle_returns_empty(self, db):
+        """expand_bundle on non-bundle returns empty list."""
+        from offerman.adapters.catalog_backend import OffermanCatalogBackend
+
+        Product.objects.create(sku="SINGLE", name="Single", base_price_q=500)
+        backend = OffermanCatalogBackend()
+        result = backend.expand_bundle("SINGLE")
+        assert result == []
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 4.4 — Suggestions
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestSuggestions:
+    """find_alternatives and find_similar tests."""
+
+    def test_find_alternatives_with_keywords(self, db):
+        """find_alternatives returns products with common keywords."""
+        from offerman.contrib.suggestions.suggestions import find_alternatives
+        from offerman.models import Collection, CollectionItem
+
+        coll = Collection.objects.create(slug="paes", name="Paes")
+        p1 = Product.objects.create(sku="PAO-INT", name="Pao Integral", base_price_q=400)
+        p1.keywords.add("integral", "pao")
+        CollectionItem.objects.create(collection=coll, product=p1, is_primary=True)
+
+        p2 = Product.objects.create(sku="PAO-7G", name="Pao 7 Graos", base_price_q=500)
+        p2.keywords.add("integral", "graos")
+        CollectionItem.objects.create(collection=coll, product=p2, is_primary=True)
+
+        p3 = Product.objects.create(sku="BOLO", name="Bolo", base_price_q=1000)
+        p3.keywords.add("doce")
+        CollectionItem.objects.create(collection=coll, product=p3, is_primary=True)
+
+        alternatives = find_alternatives("PAO-INT")
+        skus = [a.sku for a in alternatives]
+        assert "PAO-7G" in skus  # Shares 'integral' keyword
+        assert "BOLO" not in skus  # No common keyword
+
+    def test_find_alternatives_no_keywords(self, db):
+        """find_alternatives returns empty when product has no keywords."""
+        from offerman.contrib.suggestions.suggestions import find_alternatives
+
+        Product.objects.create(sku="NAKED", name="No Keywords", base_price_q=100)
+        assert find_alternatives("NAKED") == []
+
+    def test_find_alternatives_nonexistent(self, db):
+        """find_alternatives returns empty for unknown SKU."""
+        from offerman.contrib.suggestions.suggestions import find_alternatives
+
+        assert find_alternatives("GHOST") == []
+
+    def test_find_similar_same_collection(self, db):
+        """find_similar returns products from same collection with keywords."""
+        from offerman.contrib.suggestions.suggestions import find_similar
+        from offerman.models import Collection, CollectionItem
+
+        coll = Collection.objects.create(slug="paes", name="Paes")
+        p1 = Product.objects.create(sku="SIM-1", name="Product 1", base_price_q=400)
+        p1.keywords.add("artesanal")
+        CollectionItem.objects.create(collection=coll, product=p1, is_primary=True)
+
+        p2 = Product.objects.create(sku="SIM-2", name="Product 2", base_price_q=500)
+        p2.keywords.add("artesanal")
+        CollectionItem.objects.create(collection=coll, product=p2, is_primary=True)
+
+        similar = find_similar("SIM-1")
+        skus = [s.sku for s in similar]
+        assert "SIM-2" in skus

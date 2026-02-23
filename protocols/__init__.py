@@ -7,9 +7,11 @@ from offerman.protocols.catalog import (
     SkuValidation,
     BundleComponent,
 )
+from offerman.protocols.cost import CostBackend
 
 __all__ = [
     "CatalogBackend",
+    "CostBackend",
     "ProductInfo",
     "PriceInfo",
     "SkuValidation",
